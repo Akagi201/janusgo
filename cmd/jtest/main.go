@@ -7,11 +7,13 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/jmcvetta/randutil"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"golang.org/x/net/websocket"
 )
 
 var transMap map[string]chan []byte
 var gsessionID int64
+var ghandleID int64
 
 func init() {
 	transMap = make(map[string]chan []byte)
@@ -49,6 +51,23 @@ func processRecv(conn *websocket.Conn) {
 			if ch, ok := transMap[transaction]; ok {
 				ch <- buffer[:n]
 			}
+		} else if typ == "timeout" {
+			sessionID := gjson.GetBytes(buffer[:n], "session_id").Int()
+			log.Infof("timeout session_id: %v", sessionID)
+		} else if typ == "ack" {
+			transaction := gjson.GetBytes(buffer[:n], "transaction").String()
+
+			log.Infof("type: %v, transaction: %v", typ, transaction)
+			if ch, ok := transMap[transaction]; ok {
+				ch <- buffer[:n]
+			}
+		} else if typ == "event" {
+			transaction := gjson.GetBytes(buffer[:n], "transaction").String()
+
+			log.Infof("type: %v, transaction: %v", typ, transaction)
+			if ch, ok := transMap[transaction]; ok {
+				ch <- buffer[:n]
+			}
 		}
 	}
 }
@@ -72,7 +91,6 @@ func sendCreateSig(conn *websocket.Conn) error {
 	transMap[createSig["transaction"]] = response
 
 	bytes := <-response
-
 	log.Infof("Create response: %v", string(bytes))
 
 	gsessionID = gjson.GetBytes(bytes, "data.id").Int()
@@ -80,7 +98,7 @@ func sendCreateSig(conn *websocket.Conn) error {
 	return nil
 }
 
-// {"janus":"attach","session_id":1145173870808008, "plugin":"janus.plugin.echotest","opaque_id":"echotest-IYkWieIc8SUq","transaction":"s785S3V7wWnj"}
+// {"janus":"attach","session_id":1138646217789133, "plugin":"janus.plugin.echotest","opaque_id":"echotest-IYkWieIc8SUq","transaction":"s785S3V7wWnj"}
 func sendAttachSig(conn *websocket.Conn) error {
 	attachSig := make(map[string]interface{})
 	attachSig["janus"] = "attach"
@@ -102,6 +120,35 @@ func sendAttachSig(conn *websocket.Conn) error {
 
 	bytes := <-response
 	log.Infof("Attach response: %v", string(bytes))
+
+	ghandleID = gjson.GetBytes(bytes, "data.id").Int()
+
+	return nil
+}
+
+// {"janus":"message","body":{"audio":true,"video":true},"transaction":"R1y2XvCeze7S", "session_id":1138646217789133, "handle_id": 594589210486401}
+func sendMessageSig(conn *websocket.Conn) error {
+	msg := []byte(`{"janus":"message","body":{"audio":false,"video":false},"transaction":"R1y2XvCeze7S","session_id":1138646217789133, "handle_id": 594589210486401}`)
+	trans, _ := randutil.AlphaString(12)
+
+	req, _ := sjson.SetBytes(msg, "transaction", trans)
+	req, _ = sjson.SetBytes(req, "session_id", gsessionID)
+	req, _ = sjson.SetBytes(req, "handle_id", ghandleID)
+	log.Infof("Message signal request: %v", string(req))
+
+	_, err := conn.Write(req)
+	if err != nil {
+		return err
+	}
+
+	response := make(chan []byte)
+	transMap[trans] = response
+
+	bytes := <-response
+	log.Infof("Message ack response: %v", string(bytes))
+
+	bytes = <-response
+	log.Infof("Message event response: %v", string(bytes))
 
 	return nil
 }
@@ -133,4 +180,8 @@ func main() {
 	sendCreateSig(conn)
 
 	sendAttachSig(conn)
+
+	sendMessageSig(conn)
+
+	select {}
 }
