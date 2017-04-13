@@ -22,3 +22,7 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+/cmd/jinfo/jinfo
+/cmd/jlist/jlist
+/cmd/jtest/jtest
