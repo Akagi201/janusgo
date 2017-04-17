@@ -140,7 +140,7 @@ func sendAttachSig(conn *websocket.Conn) error {
 
 // {"janus":"message","body":{"audio":false,"video":false},"transaction":"R1y2XvCeze7S", "jsep":{"type":"offer", "sdp":""}, "session_id":1138646217789133, "handle_id": 594589210486401}
 func sendSDPSig(conn *websocket.Conn) error {
-	msg := []byte(`{"janus":"message","body":{"audio":false,"video":false},"transaction":"R1y2XvCeze7S","jsep":{"type":"offer", "sdp":""},"session_id":1138646217789133, "handle_id": 594589210486401}`)
+	msg := []byte(`{"janus":"message","body":{"audio":false,"video":false},"transaction":"R1y2XvCeze7S","jsep":{"type":"offer", "sdp":"", "trickle": false},"session_id":1138646217789133, "handle_id": 594589210486401}`)
 	trans, _ := randutil.AlphaString(12)
 
 	req, _ := sjson.SetBytes(msg, "transaction", trans)
