@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"strings"
 
-	log "github.com/Sirupsen/logrus"
 	flags "github.com/jessevdk/go-flags"
+	log "github.com/sirupsen/logrus"
 )
 
 var opts struct {
