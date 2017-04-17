@@ -2,14 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/signal"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/jmcvetta/randutil"
 	"github.com/keroserene/go-webrtc"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"golang.org/x/net/websocket"
@@ -140,7 +139,7 @@ func sendAttachSig(conn *websocket.Conn) error {
 }
 
 // {"janus":"message","body":{"audio":false,"video":false},"transaction":"R1y2XvCeze7S", "jsep":{"type":"offer", "sdp":""}, "session_id":1138646217789133, "handle_id": 594589210486401}
-func sendMessageSig(conn *websocket.Conn) error {
+func sendSDPSig(conn *websocket.Conn) error {
 	msg := []byte(`{"janus":"message","body":{"audio":false,"video":false},"transaction":"R1y2XvCeze7S","jsep":{"type":"offer", "sdp":""},"session_id":1138646217789133, "handle_id": 594589210486401}`)
 	trans, _ := randutil.AlphaString(12)
 
@@ -164,11 +163,21 @@ func sendMessageSig(conn *websocket.Conn) error {
 	bytes := <-response
 	log.Infof("Message ack response: %v", string(bytes))
 
+	answerJsep := gjson.GetBytes(bytes, "jsep").String()
+
 	bytes = <-response
 	log.Infof("Message event response: %v", string(bytes))
 
-	answer := gjson.GetBytes(bytes, "jsep.sdp").String()
-	ansserSDP := webrtc.DeserializeSessionDescription()
+	if answerJsep == "null" {
+		answerJsep = gjson.GetBytes(bytes, "jsep").String()
+	}
+
+	log.Infof("jsep : %v", answerJsep)
+
+	answerSDP := webrtc.DeserializeSessionDescription(answerJsep)
+	if answerSDP != nil {
+		receiveDescription(answerSDP)
+	}
 
 	return nil
 }
@@ -212,13 +221,35 @@ func sendKeepalive(conn *websocket.Conn) {
 //
 
 func generateOffer() {
-	fmt.Println("Generating offer...")
+	log.Infoln("Generating offer...")
 	offer, err := pc.CreateOffer() // blocking
 	if err != nil {
-		fmt.Println(err)
+		log.Errorln(err)
 		return
 	}
 	pc.SetLocalDescription(offer)
+}
+
+//func generateAnswer() {
+//	log.Infoln("Generating answer...")
+//	answer, err := pc.CreateAnswer() // blocking
+//	if err != nil {
+//		log.Errorln(err)
+//		return
+//	}
+//	pc.SetLocalDescription(answer)
+//}
+
+func receiveDescription(sdp *webrtc.SessionDescription) {
+	err := pc.SetRemoteDescription(sdp)
+	if err != nil {
+		log.Errorf("ERROR: %v", err)
+		return
+	}
+	log.Infoln("SDP " + sdp.Type + " successfully received.")
+	//if "offer" == sdp.Type {
+	//	go generateAnswer()
+	//}
 }
 
 // Attach callbacks to a newly created data channel.
@@ -228,6 +259,11 @@ func generateOffer() {
 func prepareDataChannel(channel *webrtc.DataChannel) {
 	channel.OnOpen = func() {
 		log.Infoln("Data Channel Opened!")
+		for {
+			dc.SendText("hello, world")
+			log.Infoln("Data Channel sent!")
+			time.Sleep(1 * time.Second)
+		}
 		//startChat()
 	}
 	channel.OnClose = func() {
@@ -236,6 +272,7 @@ func prepareDataChannel(channel *webrtc.DataChannel) {
 	}
 	channel.OnMessage = func(msg []byte) {
 		log.Infoln("Data Channel message received.")
+		log.Infof("receive from datachannel: %v", string(msg))
 		//receiveChat(string(msg))
 	}
 }
@@ -245,7 +282,7 @@ func prepareDataChannel(channel *webrtc.DataChannel) {
 // negotiation-needed, leading to preparing an SDP offer to be sent to the
 // remote peer. Otherwise, await an SDP offer from the remote peer, and send an
 // answer back.
-func start(instigator bool) {
+func start() {
 	var err error
 	log.Infoln("Starting up PeerConnection...")
 	// TODO: Try with TURN servers.
@@ -264,6 +301,7 @@ func start(instigator bool) {
 	pc.OnNegotiationNeeded = func() {
 		go generateOffer()
 	}
+
 	// Once all ICE candidates are prepared, they need to be sent to the remote
 	// peer which will attempt reaching the local peer through NATs.
 	pc.OnIceComplete = func() {
@@ -273,7 +311,7 @@ func start(instigator bool) {
 	}
 	/*
 		pc.OnIceGatheringStateChange = func(state webrtc.IceGatheringState) {
-			fmt.Println("Ice Gathering State:", state)
+			log.Infoln("Ice Gathering State:", state)
 			if webrtc.IceGatheringStateComplete == state {
 				// send local description.
 			}
@@ -281,22 +319,20 @@ func start(instigator bool) {
 	*/
 	// A DataChannel is generated through this callback only when the remote peer
 	// has initiated the creation of the data channel.
-	pc.OnDataChannel = func(channel *webrtc.DataChannel) {
-		log.Infoln("Datachannel established by remote... ", channel.Label())
-		dc = channel
-		prepareDataChannel(channel)
-	}
+	//pc.OnDataChannel = func(channel *webrtc.DataChannel) {
+	//	log.Infoln("Datachannel established by remote... ", channel.Label())
+	//	dc = channel
+	//	prepareDataChannel(channel)
+	//}
 
-	if instigator {
-		// Attempting to create the first datachannel triggers ICE.
-		log.Infoln("Initializing datachannel....")
-		dc, err = pc.CreateDataChannel("test", webrtc.Init{})
-		if nil != err {
-			log.Errorln("Unexpected failure creating Channel.")
-			return
-		}
-		prepareDataChannel(dc)
+	// Attempting to create the first datachannel triggers ICE.
+	log.Infoln("Initializing datachannel....")
+	dc, err = pc.CreateDataChannel("JanusDataChannel", webrtc.Init{Ordered: false})
+	if nil != err {
+		log.Errorln("Unexpected failure creating Channel.")
+		return
 	}
+	prepareDataChannel(dc)
 }
 
 func main() {
@@ -305,7 +341,7 @@ func main() {
 	signal.Notify(sigs, os.Interrupt)
 	go func() {
 		<-sigs
-		fmt.Println("Demo interrupted. Disconnecting...")
+		log.Infoln("Demo interrupted. Disconnecting...")
 		if nil != dc {
 			dc.Close()
 		}
@@ -317,7 +353,7 @@ func main() {
 
 	conn, err := websocket.Dial(opts.WsAddr, "janus-protocol", "http://10.0.6.22")
 	if err != nil {
-		fmt.Printf("Connect: %s\n", err)
+		log.Errorf("Connect: %s\n", err)
 		return
 	}
 	defer conn.Close()
@@ -330,9 +366,9 @@ func main() {
 
 	sendAttachSig(conn)
 
-	start(true)
+	start()
 
-	sendMessageSig(conn)
+	sendSDPSig(conn)
 
 	select {}
 }
